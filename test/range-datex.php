@@ -22,7 +22,7 @@ require_once 'phplot.php';
 # Extract all test parameters as local variables:
 extract($tp);
 
-$dtformat = '%Y-%m-%d %H:%M:%S';
+$dtformat = 'Y-m-d H:i:s';
 
 # Check for needed methods, depending on test parameters:
 if (isset($mintick) && !method_exists('PHPlot', 'TuneXAutoTicks')) {
@@ -36,7 +36,7 @@ $data = array( array('', $xmin, 0), array('', $xmax, 100));
 # Build a title including the options:
 if ($xmin > 86400) {
     # Assume these are dates.
-    $range = strftime($dtformat, $xmin) . ' : ' . strftime($dtformat, $xmax);
+    $range = date($dtformat, (int)$xmin) . ' : ' . date($dtformat, (int)$xmax);
 } else {
     $range = "$xmin : $xmax";
 }

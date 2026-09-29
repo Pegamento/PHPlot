@@ -7,7 +7,7 @@
  * charts, and plots. The PHPlot class is the basic class which creates
  * indexed-color images, and the extended PHPlot_truecolor class creates
  * full-color (24-bit) images.
- * PHPlot currently requires PHP 5.3 or later.
+ * PHPlot runs on PHP 7 and later, including PHP 8.4.
  *
  * $Id$
  *
@@ -704,9 +704,8 @@ class phplot
     /**
      * Prepares object for serialization
      *
-     * The image resource cannot be serialized. But rather than try to filter it out from the other
-     * properties, just let PHP serialize it (it will become an integer=0), and then fix it in __wakeup.
-     * This way the object is still usable after serialize().
+     * The image resource cannot be serialized and is omitted from the property list.
+     * __wakeup() recreates the image resource. This way the object is still usable after serialize().
      * Note: This does not work if an input file was provided to the constructor.
      *
      * @return string[] Array of object property names, as required by PHP spec for __sleep()
@@ -716,7 +715,7 @@ class phplot
     {
         $this->truecolor = imageistruecolor($this->img); // Remember image type
         $this->saved_version = self::version; // Remember version of PHPlot, for checking on unserialize
-        return array_keys(get_object_vars($this));
+        return array_values(array_diff(array_keys(get_object_vars($this)), array('img')));
     }
 
     /**
@@ -797,7 +796,7 @@ class phplot
         }
 
         // Deallocate any resources previously allocated
-        if (isset($this->img)) {
+        if (isset($this->img) && PHP_VERSION_ID < 80000) {
             imagedestroy($this->img);
         }
 
@@ -1437,7 +1436,14 @@ class phplot
             return $which_ndxcol; // Styles are off; use original color for drawing
         }
         // Set the line style, substituting the specified color for the # marker:
-        imagesetstyle($this->img, explode(' ', str_replace('#', $which_ndxcol, $this->default_dashed_style)));
+        $style_parts = explode(' ', str_replace('#', $which_ndxcol, $this->default_dashed_style));
+        $style_ints = array();
+        foreach ($style_parts as $part) {
+            if ($part !== '') {
+                $style_ints[] = (int)$part;
+            }
+        }
+        imagesetstyle($this->img, $style_ints);
         return IMG_COLOR_STYLED; // Use this value as the color for drawing
     }
 
@@ -1862,7 +1868,7 @@ class phplot
             $v_factor = $h_factor;
             $h_factor = 1 - $temp;
 
-            $draw_func = 'ImageStringUp';
+            $draw_vertical = true;
 
             // Rotation matrix "R" for 90 degrees (with Y pointing down):
             $r00 = 0;
@@ -1871,7 +1877,7 @@ class phplot
             $r11 = 0;
         } else {
             // Horizontal text (0 degrees):
-            $draw_func = 'ImageString';
+            $draw_vertical = false;
 
             // Rotation matrix "R" for 0 degrees:
             $r00 = 1;
@@ -1907,8 +1913,7 @@ class phplot
             $x = $xpos - $r00 * $factor;
             $y = $ypos - $r10 * $factor;
 
-            // Call ImageString or ImageStringUp:
-            $draw_func($this->img, $font_number, $x, $y, $lines[$i], $color);
+            $this->gdString($font_number, $x, $y, $lines[$i], $color, $draw_vertical);
 
             // Step to the next line of text. This is a rotation of (x=0, y=interline_spacing)
             $xpos += $r01 * $interline_step;
@@ -2115,7 +2120,7 @@ class phplot
             $ry = $qy + $r10 * $width_factor + $r11 * $font_height;
 
             // Finally, draw the text:
-            ImageTTFText($this->img, $font_size, $angle, (int)$rx, (int)$ry, (int)$color, $font_file, $lines[$i]);
+            $this->gdTtfText($font_size, $angle, $rx, $ry, $color, $font_file, $lines[$i]);
 
             // Step to position of next line.
             // This is a rotation of (x=0,y=height+line_spacing) by $angle:
@@ -2504,7 +2509,7 @@ class phplot
             $this->DrawBackground(true);  // TRUE means force overwriting of background
         } else {  // Default to plain white background
             $bgcolor = imagecolorresolve($this->img, 255, 255, 255);
-            ImageFilledRectangle($this->img, 0, 0, $this->image_width, $this->image_height, $bgcolor);
+            $this->gdFilledRectangle(0, 0, $this->image_width, $this->image_height, $bgcolor);
         }
         if ($draw_border) {
             $this->DrawImageBorder(true);
@@ -2567,10 +2572,17 @@ class phplot
                 Header('HTTP/1.0 500 Internal Server Error');
             }
         }
-        trigger_error($error_message, E_USER_ERROR);
-        // This is only reached if the error handler returns TRUE
-        unset($this->in_error);
-        return false;
+        $prev_handler = set_error_handler(function () {
+        });
+        restore_error_handler();
+        if (is_callable($prev_handler)) {
+            if ($prev_handler(E_USER_ERROR, $error_message, __FILE__, __LINE__)) {
+                unset($this->in_error);
+                return false;
+            }
+        }
+        error_log('PHPlot fatal error: ' . $error_message . ' in ' . __FILE__ . ' on line ' . __LINE__);
+        exit(1);
     }
 
     /**
@@ -2903,7 +2915,7 @@ class phplot
      * SetXLabelType('time'). But since you can pass the formatting string
      * to SetXLabelType() also, there is no need to use SetXTimeFormat().
      *
-     * @param string $which_xtf  Formatting string to use (see PHP function strftime())
+     * @param string $which_xtf  Formatting string to use (strftime pattern, implemented via date())
      * @return bool  True always
      */
     public function SetXTimeFormat($which_xtf)
@@ -2919,7 +2931,7 @@ class phplot
      * SetYLabelType('time'). But since you can pass the formatting string
      * to SetYLabelType() also, there is no need to use SetYTimeFormat().
      *
-     * @param string $which_ytf  Formatting string (see PHP function strftime())
+     * @param string $which_ytf  Formatting string (strftime pattern, implemented via date())
      * @return bool  True always
      */
     public function SetYTimeFormat($which_ytf)
@@ -5677,7 +5689,7 @@ class phplot
                            . $format['suffix'];
                     break;
                 case 'time':
-                    $which_lab = strftime($format['time_format'], $which_lab);
+                    $which_lab = date($this->StrftimePatternToDate($format['time_format']), (int)$which_lab);
                     break;
                 case 'printf':
                     if (!is_array($format['printf_format'])) {
@@ -6063,9 +6075,7 @@ class phplot
             if (isset($this->bgimg)) {    // If bgimg is defined, use it
                 $this->tile_img($this->bgimg, 0, 0, $this->image_width, $this->image_height, $this->bgmode);
             } else {                        // Else use solid color
-                ImageFilledRectangle(
-                    $this->img,
-                    0,
+                $this->gdFilledRectangle(0,
                     0,
                     $this->image_width,
                     $this->image_height,
@@ -6094,9 +6104,7 @@ class phplot
                 $this->plotbgmode
             );
         } elseif ($this->draw_plot_area_background) {
-            ImageFilledRectangle(
-                $this->img,
-                $this->plot_area[0],
+            $this->gdFilledRectangle($this->plot_area[0],
                 $this->plot_area[1],
                 $this->plot_area[2],
                 $this->plot_area[3],
@@ -6126,8 +6134,7 @@ class phplot
         }
 
         if ($mode == 'scale') {
-            imagecopyresampled(
-                $this->img,
+            $this->gdCopyResampled($this->img,
                 $im,
                 $xorig,
                 $yorig,
@@ -6157,16 +6164,18 @@ class phplot
 
         for ($x = $x0; $x < $width; $x += $tile_width) {
             for ($y = $y0; $y < $height; $y += $tile_height) {
-                imagecopy($tmp, $im, $x, $y, 0, 0, $tile_width, $tile_height);
+                $this->gdCopy($tmp, $im, $x, $y, 0, 0, $tile_width, $tile_height);
             }
         }
 
         // Copy the temporary image onto the final one.
-        imagecopy($this->img, $tmp, $xorig, $yorig, 0, 0, $width, $height);
+        $this->gdCopy($this->img, $tmp, $xorig, $yorig, 0, 0, $width, $height);
 
         // Free resources
-        imagedestroy($tmp);
-        imagedestroy($im);
+        if (PHP_VERSION_ID < 80000) {
+            imagedestroy($tmp);
+            imagedestroy($im);
+        }
 
         return true;
     }
@@ -6220,10 +6229,10 @@ class phplot
                 // Top and left lines use border color, right and bottom use the darker shade.
                 // Drawing order matters in the upper right and lower left corners.
                 for ($i = 0; $i < $width; $i++, $ex--, $ey--) {
-                    imageline($this->img, $i, $i, $ex, $i, $color1); // Top
-                    imageline($this->img, $ex, $i, $ex, $ey, $color2); // Right
-                    imageline($this->img, $i, $i, $i, $ey, $color1); // Left
-                    imageline($this->img, $i, $ey, $ex, $ey, $color2); // Bottom
+                    $this->gdLine($i, $i, $ex, $i, $color1); // Top
+                    $this->gdLine($ex, $i, $ex, $ey, $color2); // Right
+                    $this->gdLine($i, $i, $i, $ey, $color1); // Left
+                    $this->gdLine($i, $ey, $ex, $ey, $color2); // Bottom
                 }
                 break;
             case 'plain': // See note above re colors
@@ -6231,7 +6240,7 @@ class phplot
                 // Fall through
             case 'solid':
                 for ($i = 0; $i < $width; $i++, $ex--, $ey--) {
-                    imagerectangle($this->img, $i, $i, $ex, $ey, $color1);
+                    $this->gdRectangle($i, $i, $ex, $ey, $color1);
                 }
                 break;
             default:
@@ -6367,9 +6376,7 @@ class phplot
 
         //Draw X Axis at Y = x_axis_y_pixels, unless suppressed (See SetXAxisPosition)
         if (!$this->suppress_x_axis) {
-            ImageLine(
-                $this->img,
-                $this->plot_area[0] + 1,
+            $this->gdLine($this->plot_area[0] + 1,
                 $this->x_axis_y_pixels,
                 $this->plot_area[2] - 1,
                 $this->x_axis_y_pixels,
@@ -6394,9 +6401,7 @@ class phplot
 
         // Draw Y axis at X = y_axis_x_pixels, unless suppressed (See SetYAxisPosition)
         if (!$this->suppress_y_axis) {
-            ImageLine(
-                $this->img,
-                $this->y_axis_x_pixels,
+            $this->gdLine($this->y_axis_x_pixels,
                 $this->plot_area[1],
                 $this->y_axis_x_pixels,
                 $this->plot_area[3],
@@ -6418,9 +6423,7 @@ class phplot
     {
         // Ticks on X axis
         if ($this->x_tick_pos == 'xaxis') {
-            ImageLine(
-                $this->img,
-                $x_pixels,
+            $this->gdLine($x_pixels,
                 $this->x_axis_y_pixels - $this->x_tick_cross,
                 $x_pixels,
                 $this->x_axis_y_pixels + $this->x_tick_length,
@@ -6430,9 +6433,7 @@ class phplot
 
         // Ticks on top of the Plot Area
         if ($this->x_tick_pos == 'plotup' || $this->x_tick_pos == 'both') {
-            ImageLine(
-                $this->img,
-                $x_pixels,
+            $this->gdLine($x_pixels,
                 $this->plot_area[1] - $this->x_tick_length,
                 $x_pixels,
                 $this->plot_area[1] + $this->x_tick_cross,
@@ -6442,9 +6443,7 @@ class phplot
 
         // Ticks on bottom of Plot Area
         if ($this->x_tick_pos == 'plotdown' || $this->x_tick_pos == 'both') {
-            ImageLine(
-                $this->img,
-                $x_pixels,
+            $this->gdLine($x_pixels,
                 $this->plot_area[3] + $this->x_tick_length,
                 $x_pixels,
                 $this->plot_area[3] - $this->x_tick_cross,
@@ -6512,9 +6511,7 @@ class phplot
     {
         // Ticks on Y axis
         if ($this->y_tick_pos == 'yaxis') {
-            ImageLine(
-                $this->img,
-                $this->y_axis_x_pixels - $this->y_tick_length,
+            $this->gdLine($this->y_axis_x_pixels - $this->y_tick_length,
                 $y_pixels,
                 $this->y_axis_x_pixels + $this->y_tick_cross,
                 $y_pixels,
@@ -6524,9 +6521,7 @@ class phplot
 
         // Ticks to the left of the Plot Area
         if (($this->y_tick_pos == 'plotleft') || ($this->y_tick_pos == 'both')) {
-            ImageLine(
-                $this->img,
-                $this->plot_area[0] - $this->y_tick_length,
+            $this->gdLine($this->plot_area[0] - $this->y_tick_length,
                 $y_pixels,
                 $this->plot_area[0] + $this->y_tick_cross,
                 $y_pixels,
@@ -6536,9 +6531,7 @@ class phplot
 
         // Ticks to the right of the Plot Area
         if (($this->y_tick_pos == 'plotright') || ($this->y_tick_pos == 'both')) {
-            ImageLine(
-                $this->img,
-                $this->plot_area[2] + $this->y_tick_length,
+            $this->gdLine($this->plot_area[2] + $this->y_tick_length,
                 $y_pixels,
                 $this->plot_area[2] - $this->y_tick_cross,
                 $y_pixels,
@@ -6616,7 +6609,7 @@ class phplot
 
             // Draw vertical grid line:
             if ($draw_grid) {
-                ImageLine($this->img, $x_pixels, $this->plot_area[1], $x_pixels, $this->plot_area[3], $style);
+                $this->gdLine($x_pixels, $this->plot_area[1], $x_pixels, $this->plot_area[3], $style);
             }
 
             // Draw tick mark and tick label:
@@ -6647,9 +6640,7 @@ class phplot
 
             // Draw horizontal grid line:
             if ($draw_grid) {
-                ImageLine(
-                    $this->img,
-                    $this->plot_area[0] + 1,
+                $this->gdLine($this->plot_area[0] + 1,
                     $y_pixels,
                     $this->plot_area[2] - 1,
                     $y_pixels,
@@ -6691,9 +6682,7 @@ class phplot
             $sides |= $map[$option];
         }
         if ($sides == 15) { // Border on all 4 sides
-            imagerectangle(
-                $this->img,
-                $this->plot_area[0],
+            $this->gdRectangle($this->plot_area[0],
                 $this->plot_area[1],
                 $this->plot_area[2],
                 $this->plot_area[3],
@@ -6701,9 +6690,7 @@ class phplot
             );
         } else {
             if ($sides & 1) { // Left
-                imageline(
-                    $this->img,
-                    $this->plot_area[0],
+                $this->gdLine($this->plot_area[0],
                     $this->plot_area[1],
                     $this->plot_area[0],
                     $this->plot_area[3],
@@ -6711,9 +6698,7 @@ class phplot
                 );
             }
             if ($sides & 2) { // Top
-                imageline(
-                    $this->img,
-                    $this->plot_area[0],
+                $this->gdLine($this->plot_area[0],
                     $this->plot_area[1],
                     $this->plot_area[2],
                     $this->plot_area[1],
@@ -6721,9 +6706,7 @@ class phplot
                 );
             }
             if ($sides & 4) { // Right
-                imageline(
-                    $this->img,
-                    $this->plot_area[2],
+                $this->gdLine($this->plot_area[2],
                     $this->plot_area[1],
                     $this->plot_area[2],
                     $this->plot_area[3],
@@ -6731,9 +6714,7 @@ class phplot
                 );
             }
             if ($sides & 8) { // Bottom
-                imageline(
-                    $this->img,
-                    $this->plot_area[0],
+                $this->gdLine($this->plot_area[0],
                     $this->plot_area[3],
                     $this->plot_area[2],
                     $this->plot_area[3],
@@ -6920,15 +6901,15 @@ class phplot
 
         if ($this->x_data_label_pos == 'both') {
             // Lines from the bottom up
-            ImageLine($this->img, $xpos, $this->plot_area[3], $xpos, $this->plot_area[1], $style);
+            $this->gdLine($xpos, $this->plot_area[3], $xpos, $this->plot_area[1], $style);
         } elseif ($this->x_data_label_pos == 'plotdown' && isset($this->data_max[$row])) {
             // Lines from the bottom of the plot up to the max Y value at this X:
             $ypos = $this->ytr($this->data_max[$row]);
-            ImageLine($this->img, $xpos, $ypos, $xpos, $this->plot_area[3], $style);
+            $this->gdLine($xpos, $ypos, $xpos, $this->plot_area[3], $style);
         } elseif ($this->x_data_label_pos == 'plotup' && isset($this->data_min[$row])) {
             // Lines from the top of the plot down to the min Y value at this X:
             $ypos = $this->ytr($this->data_min[$row]);
-            ImageLine($this->img, $xpos, $this->plot_area[1], $xpos, $ypos, $style);
+            $this->gdLine($xpos, $this->plot_area[1], $xpos, $ypos, $style);
         }
         return true;
     }
@@ -6952,15 +6933,15 @@ class phplot
 
         if ($this->y_data_label_pos == 'both') {
             // Lines from the left side to the right side
-            ImageLine($this->img, $this->plot_area[0], $ypos, $this->plot_area[2], $ypos, $style);
+            $this->gdLine($this->plot_area[0], $ypos, $this->plot_area[2], $ypos, $style);
         } elseif ($this->y_data_label_pos == 'plotleft' && isset($this->data_max[$row])) {
             // Lines from the left of the plot rightwards the max X value at this Y:
             $xpos = $this->xtr($this->data_max[$row]);
-            ImageLine($this->img, $xpos, $ypos, $this->plot_area[0], $ypos, $style);
+            $this->gdLine($xpos, $ypos, $this->plot_area[0], $ypos, $style);
         } elseif ($this->y_data_label_pos == 'plotright' && isset($this->data_min[$row])) {
             // Lines from the right of the plot leftwards to the min X value at this Y:
             $xpos = $this->xtr($this->data_min[$row]);
-            ImageLine($this->img, $this->plot_area[2], $ypos, $xpos, $ypos, $style);
+            $this->gdLine($this->plot_area[2], $ypos, $xpos, $ypos, $style);
         }
         return true;
     }
@@ -7383,6 +7364,190 @@ class phplot
     }
 
     /**
+     * Casts a value for use as a GD pixel coordinate or size (truncates toward zero).
+     *
+     * @param mixed $value
+     * @return int
+     */
+    protected function gdInt($value)
+    {
+        return (int)$value;
+    }
+
+    /**
+     * Casts polygon point coordinates for GD.
+     *
+     * @param array $points
+     * @return array
+     */
+    protected function gdPoints(array $points)
+    {
+        $ints = array();
+        foreach ($points as $p) {
+            $ints[] = (int)$p;
+        }
+        return $ints;
+    }
+
+    protected function gdLine($x1, $y1, $x2, $y2, $color)
+    {
+        return imageline($this->img, (int)$x1, (int)$y1, (int)$x2, (int)$y2, (int)$color);
+    }
+
+    protected function gdRectangle($x1, $y1, $x2, $y2, $color)
+    {
+        return imagerectangle($this->img, (int)$x1, (int)$y1, (int)$x2, (int)$y2, (int)$color);
+    }
+
+    protected function gdFilledRectangle($x1, $y1, $x2, $y2, $color)
+    {
+        return imagefilledrectangle($this->img, (int)$x1, (int)$y1, (int)$x2, (int)$y2, (int)$color);
+    }
+
+    protected function gdArc($cx, $cy, $width, $height, $start, $end, $color)
+    {
+        return imagearc(
+            $this->img,
+            (int)$cx,
+            (int)$cy,
+            (int)$width,
+            (int)$height,
+            (int)$start,
+            (int)$end,
+            (int)$color
+        );
+    }
+
+    protected function gdFilledArc($cx, $cy, $width, $height, $start, $end, $color, $style)
+    {
+        return imagefilledarc(
+            $this->img,
+            (int)$cx,
+            (int)$cy,
+            (int)$width,
+            (int)$height,
+            (int)$start,
+            (int)$end,
+            (int)$color,
+            $style
+        );
+    }
+
+    protected function gdFilledEllipse($cx, $cy, $width, $height, $color)
+    {
+        return imagefilledellipse($this->img, (int)$cx, (int)$cy, (int)$width, (int)$height, (int)$color);
+    }
+
+    protected function gdString($font, $x, $y, $text, $color, $vertical = false)
+    {
+        if ($vertical) {
+            return imagestringup($this->img, (int)$font, (int)$x, (int)$y, $text, (int)$color);
+        }
+        return imagestring($this->img, (int)$font, (int)$x, (int)$y, $text, (int)$color);
+    }
+
+    protected function gdTtfText($font_size, $angle, $x, $y, $color, $font_file, $text)
+    {
+        return imagettftext(
+            $this->img,
+            (int)$font_size,
+            (int)$angle,
+            (int)$x,
+            (int)$y,
+            (int)$color,
+            $font_file,
+            $text
+        );
+    }
+
+    protected function gdCopy($dst, $src, $dstX, $dstY, $srcX, $srcY, $srcW, $srcH)
+    {
+        return imagecopy(
+            $dst,
+            $src,
+            (int)$dstX,
+            (int)$dstY,
+            (int)$srcX,
+            (int)$srcY,
+            (int)$srcW,
+            (int)$srcH
+        );
+    }
+
+    protected function gdCopyResampled($dst, $src, $dstX, $dstY, $srcX, $srcY, $dstW, $dstH, $srcW, $srcH)
+    {
+        return imagecopyresampled(
+            $dst,
+            $src,
+            (int)$dstX,
+            (int)$dstY,
+            (int)$srcX,
+            (int)$srcY,
+            (int)$dstW,
+            (int)$dstH,
+            (int)$srcW,
+            (int)$srcH
+        );
+    }
+
+    protected function gdSetThickness($thickness)
+    {
+        return imagesetthickness($this->img, (int)$thickness);
+    }
+
+    protected function gdPolygon(array $points, $color, $filled)
+    {
+        $pts = $this->gdPoints($points);
+        $c = (int)$color;
+        if (PHP_VERSION_ID >= 80100) {
+            if ($filled) {
+                return imagefilledpolygon($this->img, $pts, $c);
+            }
+            return imagepolygon($this->img, $pts, $c);
+        }
+        $n = intdiv(count($pts), 2);
+        if ($filled) {
+            return imagefilledpolygon($this->img, $pts, $n, $c);
+        }
+        return imagepolygon($this->img, $pts, $n, $c);
+    }
+
+    /**
+     * Converts a strftime() format string to a date() format string.
+     *
+     * @param string $pattern  strftime pattern
+     * @return string  date() pattern
+     */
+    protected function StrftimePatternToDate($pattern)
+    {
+        $out = '';
+        $len = strlen($pattern);
+        for ($i = 0; $i < $len; $i++) {
+            if ($pattern[$i] === '%' && $i + 1 < $len) {
+                $i++;
+                if ($pattern[$i] === '%') {
+                    $out .= '%';
+                    continue;
+                }
+                $map = array(
+                    'Y' => 'Y', 'y' => 'y', 'm' => 'm', 'd' => 'd', 'e' => 'j',
+                    'H' => 'H', 'I' => 'h', 'M' => 'i', 'S' => 's', 'p' => 'A', 'P' => 'a',
+                    'b' => 'M', 'B' => 'F', 'h' => 'M', 'a' => 'D', 'A' => 'l', 'w' => 'w',
+                );
+                $c = $pattern[$i];
+                if (isset($map[$c])) {
+                    $out .= $map[$c];
+                } else {
+                    $out .= $c;
+                }
+            } else {
+                $out .= $pattern[$i];
+            }
+        }
+        return $out;
+    }
+
+    /**
      * Draws the plot legend - the outline box, text labels, and color boxes or shapes
      *
      * @return bool  True always
@@ -7399,18 +7564,14 @@ class phplot
         $box_end_x = $box_start_x + $width;
 
         // Draw outer box
-        ImageFilledRectangle(
-            $this->img,
-            $box_start_x,
+        $this->gdFilledRectangle($box_start_x,
             $box_start_y,
             $box_end_x,
             $box_end_y,
             $this->ndx_legend_bg_color
         );
         if ($this->draw_legend_border) {
-            ImageRectangle(
-                $this->img,
-                $box_start_x,
+            $this->gdRectangle($box_start_x,
                 $box_start_y,
                 $box_end_x,
                 $box_end_y,
@@ -7486,9 +7647,7 @@ class phplot
 
                 // If plot area background is on, draw a background for any non-box shapes:
                 if ($this->draw_plot_area_background && $colorbox_mode != 'box') {
-                    ImageFilledRectangle(
-                        $this->img,
-                        $dot_left_x,
+                    $this->gdFilledRectangle($dot_left_x,
                         $y1,
                         $dot_right_x,
                         $y2,
@@ -7504,13 +7663,13 @@ class phplot
 
                     case 'line':
                         // Draw a short line segment with proper color, width, and style
-                        imagesetthickness($this->img, $this->line_widths[$lws_index]);
+                        $this->gdSetThickness($this->line_widths[$lws_index]);
                         $style = $this->SetDashedStyle(
                             $this->ndx_data_colors[$color_index],
                             $this->line_styles[$lws_index] == 'dashed'
                         );
-                        imageline($this->img, $dot_left_x, $yc, $dot_right_x, $yc, $style);
-                        imagesetthickness($this->img, 1);
+                        $this->gdLine($dot_left_x, $yc, $dot_right_x, $yc, $style);
+                        $this->gdSetThickness(1);
                         if (++$lws_index >= $this->data_columns) {
                             $lws_index = 0; // Wrap around
                         }
@@ -7518,9 +7677,7 @@ class phplot
 
                     default:
                         // Draw color boxes:
-                        ImageFilledRectangle(
-                            $this->img,
-                            $dot_left_x,
+                        $this->gdFilledRectangle($dot_left_x,
                             $y1,
                             $dot_right_x,
                             $y2,
@@ -7533,7 +7690,7 @@ class phplot
                             } else {
                                 $color = $this->ndx_text_color;
                             }
-                            ImageRectangle($this->img, $dot_left_x, $y1, $dot_right_x, $y2, $color);
+                            $this->gdRectangle($dot_left_x, $y1, $dot_right_x, $y2, $color);
                         }
                 }
                 if (++$color_index > $max_color_index) {
@@ -7707,7 +7864,7 @@ class phplot
 
         switch ($this->point_shapes[$index]) {
             case 'halfline':
-                ImageLine($this->img, $x1, $y, $x, $y, $color);
+                $this->gdLine($x1, $y, $x, $y, $color);
                 break;
             case 'none': /* Special case, no point shape here */
                 if ($allow_none) {
@@ -7715,76 +7872,76 @@ class phplot
                 }
                 //no break
             case 'line':
-                ImageLine($this->img, $x1, $y, $x2, $y, $color);
+                $this->gdLine($x1, $y, $x2, $y, $color);
                 break;
             case 'plus':
-                ImageLine($this->img, $x1, $y, $x2, $y, $color);
-                ImageLine($this->img, $x, $y1, $x, $y2, $color);
+                $this->gdLine($x1, $y, $x2, $y, $color);
+                $this->gdLine($x, $y1, $x, $y2, $color);
                 break;
             case 'cross':
-                ImageLine($this->img, $x1, $y1, $x2, $y2, $color);
-                ImageLine($this->img, $x1, $y2, $x2, $y1, $color);
+                $this->gdLine($x1, $y1, $x2, $y2, $color);
+                $this->gdLine($x1, $y2, $x2, $y1, $color);
                 break;
             case 'circle':
-                ImageArc($this->img, $x, $y, $point_size, $point_size, 0, 360, $color);
+                $this->gdArc($x, $y, $point_size, $point_size, 0, 360, $color);
                 break;
             case 'dot':
-                ImageFilledEllipse($this->img, $x, $y, $point_size, $point_size, $color);
+                $this->gdFilledEllipse($x, $y, $point_size, $point_size, $color);
                 break;
             case 'diamond':
                 $arrpoints = array($x1, $y, $x, $y1, $x2, $y, $x, $y2);
-                ImageFilledPolygon($this->img, $arrpoints, 4, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'triangle':
                 $arrpoints = array($x1, $y, $x2, $y, $x, $y2);
-                ImageFilledPolygon($this->img, $arrpoints, 3, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'trianglemid':
                 $arrpoints = array($x1, $y1, $x2, $y1, $x, $y);
-                ImageFilledPolygon($this->img, $arrpoints, 3, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'yield':
                 $arrpoints = array($x1, $y1, $x2, $y1, $x, $y2);
-                ImageFilledPolygon($this->img, $arrpoints, 3, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'delta':
                 $arrpoints = array($x1, $y2, $x2, $y2, $x, $y1);
-                ImageFilledPolygon($this->img, $arrpoints, 3, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'star':
-                ImageLine($this->img, $x1, $y, $x2, $y, $color);
-                ImageLine($this->img, $x, $y1, $x, $y2, $color);
-                ImageLine($this->img, $x1, $y1, $x2, $y2, $color);
-                ImageLine($this->img, $x1, $y2, $x2, $y1, $color);
+                $this->gdLine($x1, $y, $x2, $y, $color);
+                $this->gdLine($x, $y1, $x, $y2, $color);
+                $this->gdLine($x1, $y1, $x2, $y2, $color);
+                $this->gdLine($x1, $y2, $x2, $y1, $color);
                 break;
             case 'hourglass':
                 $arrpoints = array($x1, $y1, $x2, $y1, $x1, $y2, $x2, $y2);
-                ImageFilledPolygon($this->img, $arrpoints, 4, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'bowtie':
                 $arrpoints = array($x1, $y1, $x1, $y2, $x2, $y1, $x2, $y2);
-                ImageFilledPolygon($this->img, $arrpoints, 4, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'target':
-                ImageFilledRectangle($this->img, $x1, $y1, $x, $y, $color);
-                ImageFilledRectangle($this->img, $x, $y, $x2, $y2, $color);
-                ImageRectangle($this->img, $x1, $y1, $x2, $y2, $color);
+                $this->gdFilledRectangle($x1, $y1, $x, $y, $color);
+                $this->gdFilledRectangle($x, $y, $x2, $y2, $color);
+                $this->gdRectangle($x1, $y1, $x2, $y2, $color);
                 break;
             case 'box':
-                ImageRectangle($this->img, $x1, $y1, $x2, $y2, $color);
+                $this->gdRectangle($x1, $y1, $x2, $y2, $color);
                 break;
             case 'home': /* As in: "home plate" (baseball), also looks sort of like a house. */
                 $arrpoints = array($x1, $y2, $x2, $y2, $x2, $y, $x, $y1, $x1, $y);
-                ImageFilledPolygon($this->img, $arrpoints, 5, $color);
+                $this->gdPolygon($arrpoints, $color, true);
                 break;
             case 'up':
-                ImagePolygon($this->img, array($x, $y1, $x2, $y2, $x1, $y2), 3, $color);
+                $this->gdPolygon(array($x, $y1, $x2, $y2, $x1, $y2), $color, false);
                 break;
             case 'down':
-                ImagePolygon($this->img, array($x, $y2, $x1, $y1, $x2, $y1), 3, $color);
+                $this->gdPolygon(array($x, $y2, $x1, $y1, $x2, $y1), $color, false);
                 break;
             default: /* Also 'rect' */
-                ImageFilledRectangle($this->img, $x1, $y1, $x2, $y2, $color);
+                $this->gdFilledRectangle($x1, $y1, $x2, $y2, $color);
                 break;
         }
         return true;
@@ -7865,7 +8022,7 @@ class phplot
         $y2 = (int)$y2;
 
         // Draw the bar
-        ImageFilledRectangle($this->img, $x1, $y1, $x2, $y2, (int)$data_color);
+        $this->gdFilledRectangle($x1, $y1, $x2, $y2, (int)$data_color);
 
         // Draw a shade, if shading is on.
         if (isset($shade_color)) {
@@ -7878,16 +8035,16 @@ class phplot
             } else { // Suppress top shading (Note shade_top==FALSE && shade_side==FALSE is not allowed)
                 $pts = array($x2, $y2, $x2, $y1, $x2 + $shade, $y1 - $shade, $x2 + $shade, $y2 - $shade);
             }
-            ImageFilledPolygon($this->img, $pts, count($pts) / 2, $shade_color);
+            $this->gdPolygon($pts, $shade_color, true);
         }
 
         // Draw a border around the bar, if enabled.
         if (isset($border_color)) {
             // Avoid a PHP/GD bug with zero-height ImageRectangle resulting in "T"-shaped ends.
             if ($y1 == $y2) {
-                imageline($this->img, $x1, $y1, $x2, $y2, $border_color);
+                $this->gdLine($x1, $y1, $x2, $y2, $border_color);
             } else {
-                imagerectangle($this->img, $x1, $y1, $x2, $y2, $border_color);
+                $this->gdRectangle($x1, $y1, $x2, $y2, $border_color);
             }
         }
         $this->DoCallback('data_points', 'rect', $row, $column, $x1, $y1, $x2, $y2);
@@ -7912,14 +8069,14 @@ class phplot
         $x2p = $this->xtr($x + $error_plus);
         $x2m = $this->xtr($x - $error_minus);
 
-        imagesetthickness($this->img, $this->error_bar_line_width);
-        imageline($this->img, $x2p, $y1, $x2m, $y1, $color);
+        $this->gdSetThickness($this->error_bar_line_width);
+        $this->gdLine($x2p, $y1, $x2m, $y1, $color);
         if ($this->error_bar_shape == 'tee') {
             $e = $this->error_bar_size;
-            imageline($this->img, $x2p, $y1 - $e, $x2p, $y1 + $e, $color);
-            imageline($this->img, $x2m, $y1 - $e, $x2m, $y1 + $e, $color);
+            $this->gdLine($x2p, $y1 - $e, $x2p, $y1 + $e, $color);
+            $this->gdLine($x2m, $y1 - $e, $x2m, $y1 + $e, $color);
         }
-        imagesetthickness($this->img, 1);
+        $this->gdSetThickness(1);
         return true;
     }
 
@@ -7941,14 +8098,14 @@ class phplot
         $y2p = $this->ytr($y + $error_plus);
         $y2m = $this->ytr($y - $error_minus);
 
-        imagesetthickness($this->img, $this->error_bar_line_width);
-        imageline($this->img, $x1, $y2p, $x1, $y2m, $color);
+        $this->gdSetThickness($this->error_bar_line_width);
+        $this->gdLine($x1, $y2p, $x1, $y2m, $color);
         if ($this->error_bar_shape == 'tee') {
             $e = $this->error_bar_size;
-            imageline($this->img, $x1 - $e, $y2p, $x1 + $e, $y2p, $color);
-            imageline($this->img, $x1 - $e, $y2m, $x1 + $e, $y2m, $color);
+            $this->gdLine($x1 - $e, $y2p, $x1 + $e, $y2p, $color);
+            $this->gdLine($x1 - $e, $y2m, $x1 + $e, $y2m, $color);
         }
-        imagesetthickness($this->img, 1);
+        $this->gdSetThickness(1);
         return true;
     }
 
@@ -8073,7 +8230,7 @@ class phplot
             // Left edge:
             $x = $xd[0];
             $y = $yd[0][$this_col];
-            ImageLine($this->img, $x, $yd[0][$other_col], $x, $y, $color);
+            $this->gdLine($x, $yd[0][$other_col], $x, $y, $color);
 
             // Across the top, with an 'X then Y' step at each point:
             for ($row = 1; $row < $this->num_data_rows; $row++) {
@@ -8082,15 +8239,15 @@ class phplot
                 $x = $xd[$row];
                 $y = $yd[$row][$this_col];
                 if ($stepped) {
-                    ImageLine($this->img, $prev_x, $prev_y, $x, $prev_y, $color);
-                    ImageLine($this->img, $x, $prev_y, $x, $y, $color);
+                    $this->gdLine($prev_x, $prev_y, $x, $prev_y, $color);
+                    $this->gdLine($x, $prev_y, $x, $y, $color);
                 } else {
-                    ImageLine($this->img, $prev_x, $prev_y, $x, $y, $color);
+                    $this->gdLine($prev_x, $prev_y, $x, $y, $color);
                 }
             }
 
             // Right edge:
-            ImageLine($this->img, $x, $y, $x, $yd[$this->num_data_rows - 1][$other_col], $color);
+            $this->gdLine($x, $y, $x, $yd[$this->num_data_rows - 1][$other_col], $color);
         }
         return true;
     }
@@ -8332,9 +8489,7 @@ class phplot
                 // Don't try to draw a 0 degree slice - it would make a full circle.
                 if ($arc_start_angle > $arc_end_angle) {
                     // Draw the slice
-                    ImageFilledArc(
-                        $this->img,
-                        $xpos,
+                    $this->gdFilledArc($xpos,
                         $ypos + $h,
                         $pie_width,
                         $pie_height,
@@ -8348,9 +8503,7 @@ class phplot
                     if ($h == 0) {
                         // Draw the pie segment outline (if enabled):
                         if ($do_borders) {
-                            ImageFilledArc(
-                                $this->img,
-                                $xpos,
+                            $this->gdFilledArc($xpos,
                                 $ypos,
                                 $pie_width,
                                 $pie_height,
@@ -8550,16 +8703,14 @@ class phplot
             // Proceed with dependent values
             for ($idx = 0; $rec < $this->num_recs[$row]; $rec++, $idx++) {
                 if (is_numeric($dv = $this->data[$row][$rec])) {          // Allow for missing data
-                    ImageSetThickness($this->img, $this->line_widths[$idx]);
+                    $this->gdSetThickness($this->line_widths[$idx]);
 
                     // Select the color:
                     $this->GetDataColor($row, $idx, $gcvars, $data_color);
 
                     if ($this->datatype_swapped_xy) {
                         // Draw a line from user defined y axis position right (or left) to xtr($dv)
-                        ImageLine(
-                            $this->img,
-                            $this->y_axis_x_pixels,
+                        $this->gdLine($this->y_axis_x_pixels,
                             $y_now_pixels,
                             $this->xtr($dv),
                             $y_now_pixels,
@@ -8567,9 +8718,7 @@ class phplot
                         );
                     } else {
                         // Draw a line from user defined x axis position up (or down) to ytr($dv)
-                        ImageLine(
-                            $this->img,
-                            $x_now_pixels,
+                        $this->gdLine($x_now_pixels,
                             $this->x_axis_y_pixels,
                             $x_now_pixels,
                             $this->ytr($dv),
@@ -8580,7 +8729,7 @@ class phplot
             }
         }
 
-        ImageSetThickness($this->img, 1);
+        $this->gdSetThickness(1);
         return true;
     }
 
@@ -8635,7 +8784,7 @@ class phplot
                 array_push($pts, $xd[$row], $yd[$row][$col]);
             }
             // Draw it:
-            ImageFilledPolygon($this->img, $pts, $n_rows * 2, $this->ndx_data_colors[$prev_col]);
+            $this->gdPolygon($pts, $this->ndx_data_colors[$prev_col], true);
 
             $prev_col = $col;
         }
@@ -8742,15 +8891,13 @@ class phplot
 
                     if ($start_lines[$idx]) {
                         // Set line width, revert it to normal at the end
-                        ImageSetThickness($this->img, $this->line_widths[$idx]);
+                        $this->gdSetThickness($this->line_widths[$idx]);
 
                         // Select solid color or dashed line
                         $style = $this->SetDashedStyle($data_color, $line_style == 'dashed');
 
                         // Draw the line segment:
-                        ImageLine(
-                            $this->img,
-                            $x_now_pixels,
+                        $this->gdLine($x_now_pixels,
                             $y_now_pixels,
                             $lastx[$idx],
                             $lasty[$idx],
@@ -8798,7 +8945,7 @@ class phplot
             }
         }
 
-        ImageSetThickness($this->img, 1);       // Revert to original state for lines to be drawn later.
+        $this->gdSetThickness(1);       // Revert to original state for lines to be drawn later.
         return true;
     }
 
@@ -8870,7 +9017,7 @@ class phplot
 
                     if ($start_lines[$idx]) {
                         // Set line width, revert it to normal at the end
-                        ImageSetThickness($this->img, $this->line_widths[$idx]);
+                        $this->gdSetThickness($this->line_widths[$idx]);
 
                         // Select the color:
                         $this->GetDataColor($row, $idx, $gcvars, $data_color);
@@ -8880,8 +9027,8 @@ class phplot
 
                         // Draw the step:
                         $y_mid = $lasty[$idx];
-                        ImageLine($this->img, $lastx[$idx], $y_mid, $x_now_pixels, $y_mid, $style);
-                        ImageLine($this->img, $x_now_pixels, $y_mid, $x_now_pixels, $y_now_pixels, $style);
+                        $this->gdLine($lastx[$idx], $y_mid, $x_now_pixels, $y_mid, $style);
+                        $this->gdLine($x_now_pixels, $y_mid, $x_now_pixels, $y_now_pixels, $style);
                     }
 
                     // Draw data value labels?
@@ -8898,7 +9045,7 @@ class phplot
             }
         }
 
-        ImageSetThickness($this->img, 1);
+        $this->gdSetThickness(1);
         return true;
     }
 
@@ -8961,7 +9108,7 @@ class phplot
             }
 
             // Draw the resulting polygon, which has (2 * (1 + 2*(n_rows-1))) points:
-            ImageFilledPolygon($this->img, $pts, 4 * $n_rows - 2, $this->ndx_data_colors[$prev_col]);
+            $this->gdPolygon($pts, $this->ndx_data_colors[$prev_col], true);
             $prev_col = $col;
         }
 
@@ -9387,7 +9534,7 @@ class phplot
         }
 
         // Assign name of GD function to draw candlestick bodies for stocks that close up.
-        $draw_body_close_up = $always_fill ? 'imagefilledrectangle' : 'imagerectangle';
+        $draw_body_close_up = $always_fill ? array($this, 'gdFilledRectangle') : array($this, 'gdRectangle');
 
         // Calculate the half-width of the candle body, or length of the tick marks.
         // This is scaled based on the plot density, but within tight limits.
@@ -9446,7 +9593,7 @@ class phplot
                 $this->GetDataColor($row, 0, $gcvars, $body_color); // Color 0 for body, closing down
                 $this->GetDataColor($row, 2, $gcvars, $ext_color);  // Color 2 for wicks/ticks
             }
-            imagesetthickness($this->img, $body_thickness);
+            $this->gdSetThickness($body_thickness);
 
             if ($draw_candles) {
                 // Note: Unlike ImageFilledRectangle, ImageRectangle 'requires' its arguments in
@@ -9457,33 +9604,33 @@ class phplot
                     $draw_body = $draw_body_close_up;
                     // Avoid a PHP/GD bug resulting in "T"-shaped ends to zero height unfilled rectangle:
                     if ($yb1_pixels == $yb2_pixels) {
-                        $draw_body = 'imagefilledrectangle';
+                        $draw_body = array($this, 'gdFilledRectangle');
                     }
                 } else {
                     $yb1_pixels = $yo_pixels;
                     $yb2_pixels = $yc_pixels;
-                    $draw_body = 'imagefilledrectangle';
+                    $draw_body = array($this, 'gdFilledRectangle');
                 }
 
                 // Draw candle body
-                $draw_body($this->img, $x_left, $yb1_pixels, $x_right, $yb2_pixels, $body_color);
+                $draw_body($x_left, $yb1_pixels, $x_right, $yb2_pixels, $body_color);
 
                 // Draw upper and lower wicks, if they have height. (In device coords, that's dY<0)
-                imagesetthickness($this->img, $wick_thickness);
+                $this->gdSetThickness($wick_thickness);
                 if ($yh_pixels < $yb1_pixels) {
-                    imageline($this->img, $x_now_pixels, $yb1_pixels, $x_now_pixels, $yh_pixels, $ext_color);
+                    $this->gdLine($x_now_pixels, $yb1_pixels, $x_now_pixels, $yh_pixels, $ext_color);
                 }
                 if ($yl_pixels > $yb2_pixels) {
-                    imageline($this->img, $x_now_pixels, $yb2_pixels, $x_now_pixels, $yl_pixels, $ext_color);
+                    $this->gdLine($x_now_pixels, $yb2_pixels, $x_now_pixels, $yl_pixels, $ext_color);
                 }
             } else {
                 // Basic OHLC
-                imageline($this->img, $x_now_pixels, $yl_pixels, $x_now_pixels, $yh_pixels, $body_color);
-                imagesetthickness($this->img, $wick_thickness);
-                imageline($this->img, $x_left, $yo_pixels, $x_now_pixels, $yo_pixels, $ext_color);
-                imageline($this->img, $x_right, $yc_pixels, $x_now_pixels, $yc_pixels, $ext_color);
+                $this->gdLine($x_now_pixels, $yl_pixels, $x_now_pixels, $yh_pixels, $body_color);
+                $this->gdSetThickness($wick_thickness);
+                $this->gdLine($x_left, $yo_pixels, $x_now_pixels, $yo_pixels, $ext_color);
+                $this->gdLine($x_right, $yc_pixels, $x_now_pixels, $yc_pixels, $ext_color);
             }
-            imagesetthickness($this->img, 1);
+            $this->gdSetThickness(1);
             $this->DoCallback('data_points', 'rect', $row, 0, $x_left, $yh_pixels, $x_right, $yl_pixels);
         }
         return true;
@@ -9544,7 +9691,7 @@ class phplot
                     $this->GetDataColor($row, $idx, $gcvars, $data_color);
 
                     // Draw the bubble:
-                    ImageFilledEllipse($this->img, $x, $y, $size, $size, $data_color);
+                    $this->gdFilledEllipse($x, $y, $size, $size, $data_color);
                     $this->DoCallback('data_points', 'circle', $row, $idx, $x, $y, $size);
                 }
             }
@@ -9633,28 +9780,28 @@ class phplot
 
             // Draw the lower whisker and T
             if (isset($yd[0]) && $yd[0] > $yd[1]) {   // Note device Y coordinates are inverted (*-1)
-                imagesetthickness($this->img, $whisker_thickness);
-                imageline($this->img, $xd, $yd[0], $xd, $yd[1], $whisker_style);
-                imageline($this->img, $xd - $width2, $yd[0], $xd + $width2, $yd[0], $whisker_color);
+                $this->gdSetThickness($whisker_thickness);
+                $this->gdLine($xd, $yd[0], $xd, $yd[1], $whisker_style);
+                $this->gdLine($xd - $width2, $yd[0], $xd + $width2, $yd[0], $whisker_color);
             }
 
             // Draw the upper whisker and T
             if (isset($yd[4]) && $yd[3] > $yd[4]) {   // Meaning: Yworld[3] < Yworld[4]
-                imagesetthickness($this->img, $whisker_thickness);
-                imageline($this->img, $xd, $yd[3], $xd, $yd[4], $whisker_style);
-                imageline($this->img, $xd - $width2, $yd[4], $xd + $width2, $yd[4], $whisker_color);
+                $this->gdSetThickness($whisker_thickness);
+                $this->gdLine($xd, $yd[3], $xd, $yd[4], $whisker_style);
+                $this->gdLine($xd - $width2, $yd[4], $xd + $width2, $yd[4], $whisker_color);
             }
 
             // Draw the median belt (before the box, so the ends of the belt don't break up the box.)
             if (isset($yd[2])) {
-                imagesetthickness($this->img, $belt_thickness);
-                imageline($this->img, $x_left, $yd[2], $x_right, $yd[2], $belt_color);
+                $this->gdSetThickness($belt_thickness);
+                $this->gdLine($x_left, $yd[2], $x_right, $yd[2], $belt_color);
             }
 
             // Draw the box
-            imagesetthickness($this->img, $box_thickness);
-            imagerectangle($this->img, $x_left, $yd[3], $x_right, $yd[1], $box_color);
-            imagesetthickness($this->img, 1);
+            $this->gdSetThickness($box_thickness);
+            $this->gdRectangle($x_left, $yd[3], $x_right, $yd[1], $box_color);
+            $this->gdSetThickness(1);
 
             // Draw any outliers, all using the same shape marker (index 0) and color:
             for ($i = 5; $i < $num_y; $i++) {

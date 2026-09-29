@@ -110,7 +110,7 @@ function lprintfts() // Variable args
     $argv = func_get_args();
     $format = array_shift($argv);
     $line = vsprintf($format, $argv);
-    lecho(strftime('%Y-%m-%d %H:%M:%S') . ' ' . $line . "\n");
+    lecho(date('Y-m-d H:i:s') . ' ' . $line . "\n");
 }
 
 # Verify global environment and set up for running the tests:
@@ -397,7 +397,7 @@ function run_test($test_name, $script_file, $output_file, $error_file)
     # We need to run the script, then touch the 'done_file', to be able
     # to check for exit().
     # Force error reporting level to the highest value for the tests.
-    $phpcmd = "error_reporting(E_ALL|E_STRICT); require '$script_file'; "
+    $phpcmd = "error_reporting(E_ALL); require '$script_file'; "
             . "touch('$done_file');";
     $cmd = "$php_exe -r \"$phpcmd\"";
     
@@ -555,8 +555,9 @@ for ($arg = 1; $arg < $argc; $arg++) {
 # Apply a match pattern (-match pattern) to limit the tests to run:
 if (!empty($match_pattern)) {
     $tests_to_run = array_values(array_filter($tests_to_run,
-                 create_function('$s',
-                     "return fnmatch('$match_pattern', \$s);")));
+                 function ($s) use ($match_pattern) {
+                     return fnmatch($match_pattern, $s);
+                 }));
 }
 $total_tests = count($tests_to_run);
 preface();

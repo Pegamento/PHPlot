@@ -76,5 +76,5 @@ $p->DrawGraph();
 fwrite(STDERR, "\nCase $x. " . $ti[$x] . "\n");
 // Implode array with , separators, but put quotes around strings:
 fwrite(STDERR, '$plot->SetLegendPosition(' . implode(', ', array_map(
-        create_function('$s', 'return is_string($s) ? "\'$s\'" : $s;'),
+        function ($s) { return is_string($s) ? "'$s'" : $s; },
         $ex[$x])) . ");\n");

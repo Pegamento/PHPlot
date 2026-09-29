@@ -57,9 +57,9 @@ function test_cases($plot, $cases)
 {
     global $test_verbose, $n_tests, $n_pass, $n_fail;
 
-    reset($cases);
-    while (list(, $input) = each($cases)) {
-        list(, $expected) = each($cases);
+    for ($i = 0; $i < count($cases); $i += 2) {
+        $input = $cases[$i];
+        $expected = $cases[$i + 1];
         $n_tests++;
         $title = "  Case $n_tests: format '$input'";
         $error = '';

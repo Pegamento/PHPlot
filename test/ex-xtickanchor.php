@@ -32,7 +32,7 @@ for ($i = 0; $i < $n_points; $i++) {
     $hour = date('G', $ts);
 
     # Label noon data points with the weekday name, all others unlabelled.
-    $label = ($hour == 12) ? strftime('%A', $ts) : '';
+    $label = ($hour == 12) ? date('l', (int)$ts) : '';
 
     # Remember the first midnight datapoint seen for use as X tick anchor:
     if (!isset($tick_anchor) && $hour == 0)

@@ -194,12 +194,12 @@ function draw_data_table($img, $settings)
     $x2 = $x + $o_width - 1;
     for ($row = 1; $row < $n_rows; $row++) {
         $y0 = $y + $row_height * $row; // Avoid accumulating errors.
-        imageline($img, $x, $y0, $x2, $y0, $color);
+        imageline($img, (int)$x, (int)$y0, (int)$x2, (int)$y0, $color);
     }
     $y2 = $y + $o_height - 1;
     for ($col = 1; $col < $n_cols; $col++) {
         $x0 = $x + $col_start[$col];
-        imageline($img, $x0, $y, $x0, $y2, $color);
+        imageline($img, (int)$x0, (int)$y, (int)$x0, (int)$y2, $color);
     }
 
     // Draw the header row, then the data rows
@@ -238,7 +238,7 @@ function draw_data_table($img, $settings)
                 } else { // Default, assume L
                     $x0 += $o_cellpadding;
                 }
-                imagestring($img, $o_font, $x0, $y0, $cell, $color);
+                imagestring($img, (int)$o_font, (int)$x0, (int)$y0, $cell, $color);
             }
             $col++;
         }
