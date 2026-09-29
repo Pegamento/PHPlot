@@ -7857,8 +7857,15 @@ class phplot
             $y2 = $t;
         }
 
+        // Device coordinates arrive as floats. GD pixel functions require ints;
+        // an implicit cast is a PHP 8.1+ deprecation ("loses precision").
+        $x1 = (int)$x1;
+        $y1 = (int)$y1;
+        $x2 = (int)$x2;
+        $y2 = (int)$y2;
+
         // Draw the bar
-        ImageFilledRectangle($this->img, (int)$x1, (int)$y1, (int)$x2, (int)$y2, (int)$data_color);
+        ImageFilledRectangle($this->img, $x1, $y1, $x2, $y2, (int)$data_color);
 
         // Draw a shade, if shading is on.
         if (isset($shade_color)) {
