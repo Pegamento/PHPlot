@@ -1,5 +1,5 @@
 {
-    "name": "phplot/phplot",
+    "name": "pegamento/phplot",
     "description": "PHP graph library for dynamic scientific, business, and stock-market charts and graphs.",
     "type": "library",
     "require": {
@@ -15,6 +15,10 @@
         {
             "name": "AJRepo",
             "email": "AJRepo@users.noreply.github.com"
+        },
+        {
+            "name": "Pegamento",
+            "homepage": "https://github.com/Pegamento/PHPlot"
         }
     ]
 }
